@@ -1,0 +1,32 @@
+# Claude Code — local/private files (never commit these)
+.claude/CLAUDE.local.md
+.claude/settings.local.json
+.claude/.mcp.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Arduino IDE build artifacts
+*.hex
+*.elf
+*.eep
+*.bin
+build/
+
+# Calibration recordings (large videos)
+docs/calibration/runs/*.mp4
+docs/calibration/runs/*.mov
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
