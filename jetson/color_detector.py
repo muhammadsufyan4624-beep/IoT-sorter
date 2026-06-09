@@ -20,12 +20,13 @@ GPIO_AVAILABLE = False
 try:
     import Jetson.GPIO as GPIO
     GPIO_AVAILABLE = True
-except ImportError:
+except Exception as e:
+    print(f"Warning: Failed to import Jetson.GPIO ({type(e).__name__}: {e}). Trying RPi.GPIO...")
     try:
         import RPi.GPIO as GPIO
         GPIO_AVAILABLE = True
-    except ImportError:
-        pass
+    except Exception as re:
+        print(f"Warning: Failed to import RPi.GPIO ({type(re).__name__}: {re}). Using mock GPIO.")
 
 
 class MockGPIO:
