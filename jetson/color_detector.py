@@ -169,13 +169,25 @@ def main():
     parser.add_argument("--height", type=int, default=480, help="Frame height (default: 480)")
     parser.add_argument("--no-gpio", action="store_true", help="Force disable GPIO output (use mock)")
     parser.add_argument("--calibrate", action="store_true", help="Open HSV calibration panel sliders")
+    parser.add_argument("--headless", action="store_true", help="Run without display (SSH/no-monitor mode). Prints results to terminal.")
     parser.add_argument("--min-area", type=int, default=3000, help="Min contour pixel area to trigger bin")
-    
+
     # GPIO pin mappings (Physical board layout numbers)
     parser.add_argument("--pin-b0", type=int, default=11, help="GPIO Pin for B0 bit (default: Board 11)")
     parser.add_argument("--pin-b1", type=int, default=13, help="GPIO Pin for B1 bit (default: Board 13)")
     parser.add_argument("--pin-strobe", type=int, default=15, help="GPIO Pin for Strobe (default: Board 15)")
     args = parser.parse_args()
+
+    # Auto-detect headless mode if DISPLAY env var is not set
+    import os
+    if not args.headless and not os.environ.get("DISPLAY"):
+        print("[Info] No DISPLAY environment variable detected. Switching to --headless mode automatically.")
+        print("[Info] Run with a monitor connected or use X11 forwarding (ssh -X) for GUI mode.")
+        args.headless = True
+
+    if args.calibrate and args.headless:
+        print("[Warning] --calibrate requires a display. Ignoring --calibrate in headless mode.")
+        args.calibrate = False
 
     # Initialize GPIO signaling
     signaller = GPIOSignaller(args.pin_b0, args.pin_b1, args.pin_strobe, force_mock=args.no_gpio)
@@ -196,13 +208,17 @@ def main():
         create_calibration_window(hsv_ranges)
         last_color_idx = 0
 
-    print("\nStarting Color Detector main loop. Press 'q' in the window to quit.")
+    if args.headless:
+        print("\nStarting Color Detector in HEADLESS mode. Press Ctrl+C to quit.")
+    else:
+        print("\nStarting Color Detector main loop. Press 'q' in the window to quit.")
     print("Signaling protocol mapping:")
     print("  - NO ITEM / IDLE : 00 (Decimal 0)")
     print("  - RED            : 01 (Decimal 1)")
     print("  - GREEN          : 10 (Decimal 2)")
     print("  - BLUE           : 11 (Decimal 3)")
     print("-" * 50)
+    last_printed_color = None
 
     try:
         while True:
@@ -288,58 +304,63 @@ def main():
             # Send decision code to GPIO
             signaller.write_code(bin_code)
 
-            # Draw visual feedback overlay
-            display_frame = frame.copy()
-            overlay_color = (128, 128, 128)
-            if detected_color == "Red":
-                overlay_color = (0, 0, 255)
-            elif detected_color == "Green":
-                overlay_color = (0, 255, 0)
-            elif detected_color == "Blue":
-                overlay_color = (255, 0, 0)
-
-            # Find contours to draw bounding box
-            if active_mask is not None:
-                contours, _ = cv2.findContours(active_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                if contours:
-                    largest_contour = max(contours, key=cv2.contourArea)
-                    x, y, w, h = cv2.boundingRect(largest_contour)
-                    cv2.rectangle(display_frame, (x, y), (x + w, y + h), overlay_color, 3)
-                    cv2.putText(display_frame, f"{detected_color} ({max_area} px)", (x, y - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, overlay_color, 2)
-
-            # Draw status bar
-            cv2.rectangle(display_frame, (0, 0), (args.width, 50), (30, 30, 30), -1)
-            status_text = f"STATE: {detected_color.upper()} | CODE: {bin_code:02b} | Pin B1B0={bin_code:02b}"
-            if bin_code > 0:
-                status_text += " | STROBE=HIGH"
+            if args.headless:
+                # Headless mode: print to terminal only on state change
+                if detected_color != last_printed_color:
+                    strobe = "STROBE=HIGH" if bin_code > 0 else "STROBE=LOW"
+                    print(f"[DETECTED] {detected_color.upper():6s} | Code: {bin_code:02b} | Area: {areas[best_color]} px | {strobe}")
+                    last_printed_color = detected_color
             else:
-                status_text += " | STROBE=LOW"
-            cv2.putText(display_frame, status_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 2)
-            
-            # Show live preview
-            cv2.imshow("Recycling Sorter Live", display_frame)
+                # GUI mode: draw overlays and show windows
+                display_frame = frame.copy()
+                overlay_color = (128, 128, 128)
+                if detected_color == "Red":
+                    overlay_color = (0, 0, 255)
+                elif detected_color == "Green":
+                    overlay_color = (0, 255, 0)
+                elif detected_color == "Blue":
+                    overlay_color = (255, 0, 0)
 
-            # If calibrating, show the mask corresponding to the selected calibration target
-            if args.calibrate:
-                selected_colors = ["Red1", "Red2", "Green", "Blue"]
-                sel_color = selected_colors[cv2.getTrackbarPos("Color Select", "Calibration Panel")]
-                
-                if sel_color == "Red1":
-                    cal_mask = red1_mask
-                elif sel_color == "Red2":
-                    cal_mask = red2_mask
-                elif sel_color == "Green":
-                    cal_mask = green_mask
-                elif sel_color == "Blue":
-                    cal_mask = blue_mask
-                
-                cv2.imshow("Calibration Mask Preview", cal_mask)
+                # Find contours to draw bounding box
+                if active_mask is not None:
+                    contours, _ = cv2.findContours(active_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if contours:
+                        largest_contour = max(contours, key=cv2.contourArea)
+                        x, y, w, h = cv2.boundingRect(largest_contour)
+                        cv2.rectangle(display_frame, (x, y), (x + w, y + h), overlay_color, 3)
+                        cv2.putText(display_frame, f"{detected_color} ({max_area} px)", (x, y - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, overlay_color, 2)
 
-            # Check key presses (exit on 'q' or Esc)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27:
-                break
+                # Draw status bar
+                cv2.rectangle(display_frame, (0, 0), (args.width, 50), (30, 30, 30), -1)
+                status_text = f"STATE: {detected_color.upper()} | CODE: {bin_code:02b} | Pin B1B0={bin_code:02b}"
+                if bin_code > 0:
+                    status_text += " | STROBE=HIGH"
+                else:
+                    status_text += " | STROBE=LOW"
+                cv2.putText(display_frame, status_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 2)
+
+                # Show live preview
+                cv2.imshow("Recycling Sorter Live", display_frame)
+
+                # If calibrating, show the mask for selected color
+                if args.calibrate:
+                    selected_colors = ["Red1", "Red2", "Green", "Blue"]
+                    sel_color = selected_colors[cv2.getTrackbarPos("Color Select", "Calibration Panel")]
+                    if sel_color == "Red1":
+                        cal_mask = red1_mask
+                    elif sel_color == "Red2":
+                        cal_mask = red2_mask
+                    elif sel_color == "Green":
+                        cal_mask = green_mask
+                    elif sel_color == "Blue":
+                        cal_mask = blue_mask
+                    cv2.imshow("Calibration Mask Preview", cal_mask)
+
+                # Check key presses (exit on 'q' or Esc)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 27:
+                    break
 
     except KeyboardInterrupt:
         print("\nKeyboard Interrupt. Shutting down...")
